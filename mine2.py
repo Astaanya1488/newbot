@@ -177,7 +177,7 @@ async def add_activity_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data['date'] = date_text
     await update.message.reply_text(
-        "Пожалуйста, введите интервал активности (например, 1 час):"
+        "Пожалуйста, введите интервал активности (например, СВУ с 17 до 20):"
     )
     return INTERVAL
 
