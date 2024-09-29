@@ -283,7 +283,7 @@ async def calc_salary_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начинает процесс расчета оплаты за час."""
     user_id = update.effective_user.id
     await update.message.reply_text(
-        "Введите ваш оклад (вводите оклад с учетом серверных и районных надбавок):",
+        "Введите ваш оклад с учетом серверных и районных надбавок:",
         reply_markup=ReplyKeyboardRemove()
     )
     return CALC_SALARY
