@@ -25,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Константы состояний для ConversationHandler
-REGISTER, DATE, INTERVAL, VIEW, CALC_SALARY, CALC_HOURS, TRANSFER_ACTIVITY, INTERVAL_INPUT = range(8)
+REGISTER, DATE, INTERVAL, VIEW, CALC_SALARY, CALC_HOURS, TRANSFER_ACTIVITY, INTERVAL_INPUT, SICK_LEAVE_OPEN_DATE = range(9)
 
 # Путь к Excel-файлу
 EXCEL_FILE = 'data.xlsx'
@@ -94,17 +94,115 @@ def main_menu(user_id):
     keyboard = [
         ['Добавить активность', 'Перенос активности'],
         ['Просмотреть активности'],
-        ['рассчитать оплату за час']
+        ['Я открыл больничный', 'Я закрыл больничный'],
+        ['Рассчитать оплату за час']
     ]
 
     # Добавляем кнопку "Скачать таблицу" только для специальных пользователей
     if user_id in SPECIAL_USER_IDS:
-        keyboard.append(['Скачать таблицу'])
+        keyboard.append(['Скачать таблицу', 'Очистить таблицу'])
 
     # Добавляем кнопку отмены
     keyboard.append(['/cancel'])
 
     return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+
+async def sick_leave_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает нажатие на кнопку 'Я открыл больничный'."""
+    await update.message.reply_text("Введите дату следующего приёма (пример 21.10.2024):")
+    return SICK_LEAVE_OPEN_DATE
+
+async def sick_leave_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает нажатие на кнопку 'Я закрыл больничный'."""
+    user_id = update.effective_user.id
+    # Получаем ФИО пользователя из листа "Users"
+    fio = None
+
+    wb = openpyxl.load_workbook(EXCEL_FILE)
+    ws_users = wb["Users"]
+    for row in ws_users.iter_rows(min_row=2, values_only=True):
+        if row[0] == user_id:
+            fio = row[1]
+            break
+    wb.close()
+
+    if not fio:
+        await update.message.reply_text("Не удалось найти ваше ФИО в базе данных.")
+        return
+
+    # Формируем сообщение для отправки специальным пользователям
+    message = f"{fio} закрыл больничный"
+
+    # Отправляем сообщение специальным пользователям
+    for special_user_id in SPECIAL_USER_IDS:
+        try:
+            await context.bot.send_message(chat_id=special_user_id, text=message)
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение пользователю {special_user_id}: {e}")
+
+
+    await update.message.reply_text("Информация отправлена ВС.", reply_markup=main_menu(user_id))
+
+async def sick_leave_open_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает ввод даты следующего приёма."""
+    next_appointment_date = update.message.text.strip()
+
+    user_id = update.effective_user.id
+    # Получаем ФИО пользователя из листа "Users"
+    fio = None
+
+    wb = openpyxl.load_workbook(EXCEL_FILE)
+    ws_users = wb["Users"]
+    for row in ws_users.iter_rows(min_row=2, values_only=True):
+        if row[0] == user_id:
+            fio = row[1]
+            break
+    wb.close()
+
+    if not fio:
+        await update.message.reply_text("Не удалось найти ваше ФИО в базе данных.")
+        return ConversationHandler.END
+
+    # Формируем сообщение для отправки специальным пользователям
+    message = f"{fio} открыл больничный, дата приема - {next_appointment_date}"
+
+    # Отправляем сообщение специальным пользователям
+    for special_user_id in SPECIAL_USER_IDS:
+        try:
+            await context.bot.send_message(chat_id=special_user_id, text=message)
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение пользователю {special_user_id}: {e}")
+
+    await update.message.reply_text("Информация отправлена.", reply_markup=main_menu(user_id))
+    return ConversationHandler.END
+
+
+async def clear_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает нажатие на кнопку 'Очистить таблицу'."""
+    user_id = update.effective_user.id
+
+    if user_id not in SPECIAL_USER_IDS:
+        await update.message.reply_text("У вас нет доступа к этой функции.")
+        return
+
+    try:
+        wb = openpyxl.load_workbook(EXCEL_FILE)
+        sheet_names = wb.sheetnames
+
+        for sheet_name in sheet_names:
+            if sheet_name != 'Users':
+                ws = wb[sheet_name]
+                # Очищаем строки, начиная со второй, сохраняя заголовки
+                ws.delete_rows(2, ws.max_row)
+
+        wb.save(EXCEL_FILE)
+        wb.close()
+
+        await update.message.reply_text("Таблица успешно очищена, кроме данных на листе 'Users'.")
+    except Exception as e:
+        logger.error(f"Ошибка при очистке таблицы: {e}")
+        await update.message.reply_text(f"Произошла ошибка при очистке таблицы: {e}")
+
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена текущей операции."""
@@ -259,7 +357,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await add_activity_start(update, context)
     elif text == 'Просмотреть активности':
         return await view_activities_start(update, context)
-    elif text == 'рассчитать оплату за час':
+    elif text == 'Рассчитать оплату за час':
         return await calc_salary_start(update, context)
     elif text == 'Скачать таблицу':
         return await download_table(update, context)
@@ -421,7 +519,7 @@ async def download_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     """Основная функция для запуска бота."""
     # Получите ваш токен от @BotFather и вставьте ниже
-    TOKEN = '7380924967:AAGbTShrh6-X59LY_sHX2NUCFvdOaNbzCwQ'  # Замените на ваш токен
+    TOKEN = '7675327255:AAH1JOxY4Ddh6mM8xDj5gtlYK424w26BGrg'  # Замените на ваш токен
 
     application = ApplicationBuilder().token(TOKEN).build()
 
@@ -466,15 +564,35 @@ def main():
 
     # ConversationHandler для расчета оплаты за час
     calc_salary_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^(рассчитать оплату за час)$'), calc_salary_start)],
+        entry_points=[MessageHandler(filters.Regex('^(Рассчитать оплату за час)$'), calc_salary_start)],
         states={
             CALC_SALARY: [MessageHandler(filters.TEXT & ~filters.COMMAND, calc_salary)],
             CALC_HOURS: [MessageHandler(filters.TEXT & ~filters.COMMAND, calc_hours)],
         },
         fallbacks=[CommandHandler('cancel', cancel)],
     )
+    # Обработчик для кнопки "Очистить таблицу"
+    clear_table_handler = MessageHandler(
+        filters.TEXT & filters.Regex('^Очистить таблицу$'),
+        clear_table
+    )
+    # Обработчик для кнопки "Я открыл больничный"
+    sick_leave_open_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^Я открыл больничный$'), sick_leave_open)],
+        states={
+            SICK_LEAVE_OPEN_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, sick_leave_open_date)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+    application.add_handler(sick_leave_open_handler)
 
+    # Обработчик для кнопки "Я закрыл больничный"
+    sick_leave_close_handler = MessageHandler(
+        filters.Regex('^Я закрыл больничный$'), sick_leave_close
+    )
     # Обработчик сообщений для главного меню
+    application.add_handler(sick_leave_close_handler)
+    application.add_handler(clear_table_handler)
     application.add_handler(transfer_activity_handler)
     application.add_handler(register_handler)
     application.add_handler(add_activity_handler)
