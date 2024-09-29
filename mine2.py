@@ -88,8 +88,8 @@ def main_menu(user_id):
     """Создаёт главное меню с кнопками. Добавляет 'Скачать таблицу' для специальных пользователей."""
     keyboard = [
         ['Добавить активность'],
-        ['Просмотреть активности'],
-        ['расчитать оплату за час']
+        ['Просмотреть уже добавленные активности'],
+        ['Узнать стоимость оплаты за час']
     ]
 
     # Добавляем кнопку "Скачать таблицу" только для специальных пользователей
@@ -237,9 +237,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == 'Добавить активность':
         return await add_activity_start(update, context)
-    elif text == 'Просмотреть активности':
+    elif text == 'Просмотреть уже добавленные активности':
         return await view_activities_start(update, context)
-    elif text == 'расчитать оплату за час':
+    elif text == 'Узнать стоимость оплаты за час':
         return await calc_salary_start(update, context)
     elif text == 'Скачать таблицу':
         return await download_table(update, context)
