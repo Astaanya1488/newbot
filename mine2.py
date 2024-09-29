@@ -519,7 +519,7 @@ async def download_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     """Основная функция для запуска бота."""
     # Получите ваш токен от @BotFather и вставьте ниже
-    TOKEN = '7675327255:AAH1JOxY4Ddh6mM8xDj5gtlYK424w26BGrg'  # Замените на ваш токен
+    TOKEN = '7380924967:AAGbTShrh6-X59LY_sHX2NUCFvdOaNbzCwQ'  # Замените на ваш токен
 
     application = ApplicationBuilder().token(TOKEN).build()
 
