@@ -94,7 +94,7 @@ def main_menu(user_id):
     keyboard = [
         ['Добавить активность', 'Перенос активности'],
         ['Просмотреть активности'],
-        ['расчитать оплату за час']
+        ['рассчитать оплату за час']
     ]
 
     # Добавляем кнопку "Скачать таблицу" только для специальных пользователей
@@ -259,7 +259,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await add_activity_start(update, context)
     elif text == 'Просмотреть активности':
         return await view_activities_start(update, context)
-    elif text == 'расчитать оплату за час':
+    elif text == 'рассчитать оплату за час':
         return await calc_salary_start(update, context)
     elif text == 'Скачать таблицу':
         return await download_table(update, context)
@@ -466,7 +466,7 @@ def main():
 
     # ConversationHandler для расчета оплаты за час
     calc_salary_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^(расчитать оплату за час)$'), calc_salary_start)],
+        entry_points=[MessageHandler(filters.Regex('^(рассчитать оплату за час)$'), calc_salary_start)],
         states={
             CALC_SALARY: [MessageHandler(filters.TEXT & ~filters.COMMAND, calc_salary)],
             CALC_HOURS: [MessageHandler(filters.TEXT & ~filters.COMMAND, calc_hours)],
