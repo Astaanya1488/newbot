@@ -14,7 +14,9 @@ from telegram.ext import (
     filters,
 )
 import openpyxl
-from openpyxl import Workbook
+from openpyxl.styles import PatternFill
+from openpyxl import Workbook, load_workbook
+from datetime import datetime
 import os
 
 # Настройка логирования
@@ -25,13 +27,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Константы состояний для ConversationHandler
-REGISTER, DATE, INTERVAL, VIEW, CALC_SALARY, CALC_HOURS, TRANSFER_ACTIVITY, INTERVAL_INPUT, SICK_LEAVE_OPEN_DATE = range(9)
+REGISTER, DATE, INTERVAL, VIEW, CALC_HOURS, TRANSFER_ACTIVITY, INTERVAL_INPUT, SICK_LEAVE_OPEN_DATE, COLOR_ROWS, NOTIFY_MESSAGE,BAN_USER, BAN_DATE, BAN_REASON = range(13)
 
 # Путь к Excel-файлу
 EXCEL_FILE = 'data.xlsx'
 
 # Список специальных user IDs для доступа к новой функции
-SPECIAL_USER_IDS = [461549398, 402468895]
+SPECIAL_USER_IDS = [461549398, 402468895,1352307342]
 
 
 def init_excel():
@@ -51,9 +53,29 @@ def init_excel():
         # Создание листа "Transfers" для переноса активности
         ws_transfers = wb.create_sheet(title="Transfers")
         ws_transfers.append(["UserID", "ФИО", "Дата", "Интервал"])
+        #Создание третьего листа "Banned"
+        ws_banned = wb.create_sheet("Banned")
+        ws_banned.append(["UserID", "ФИО", "Дата окончания бана", "Причина"])
 
         wb.save(EXCEL_FILE)
 
+def get_users():
+    """
+    Считывает список зарегистрированных пользователей из листа "Users" Excel-файла.
+    Возвращает список UserID (int).
+    """
+    if not os.path.exists(EXCEL_FILE):
+        init_excel()
+
+    wb = load_workbook(EXCEL_FILE)
+    ws_users = wb["Users"]
+
+    users = []
+    for row in ws_users.iter_rows(min_row=2, values_only=True):
+        user_id = row[0]
+        if isinstance(user_id, int):
+            users.append(user_id)
+    return users
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start. Инициирует регистрацию или показывает главное меню."""
@@ -83,33 +105,138 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return REGISTER
     else:
         await update.message.reply_text(
-            f"Добро пожаловать обратно, {fio}!",
+            f"С возвращением, {fio}!",
             reply_markup=main_menu(user_id)
         )
         return ConversationHandler.END
 
-
 def main_menu(user_id):
     """Создаёт главное меню с кнопками. Добавляет 'Скачать таблицу' для специальных пользователей."""
     keyboard = [
-        ['Добавить активность', 'Перенос активности'],
-        ['Просмотреть активности'],
-        ['Я открыл больничный', 'Я закрыл больничный'],
+        ['Активности', 'Больничный'],
         ['Рассчитать оплату за час']
     ]
 
-    # Добавляем кнопку "Скачать таблицу" только для специальных пользователей
+    # Добавляем кнопку "Особых действий" только для специальных пользователей
     if user_id in SPECIAL_USER_IDS:
-        keyboard.append(['Скачать таблицу', 'Очистить таблицу'])
+        keyboard.append(['Особые действия'])
 
     # Добавляем кнопку отмены
-    keyboard.append(['/cancel'])
+    keyboard.append(['Отмена'])
 
     return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+
+def activities_menu():
+    """Создаёт подменю для 'Активности'."""
+    keyboard = [
+        ['Добавить активность', 'Перенос активности'],
+        ['Внесенные активности', 'Проставленные активности'],
+        ['Назад']
+    ]
+
+    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+
+def sick_menu():
+    """Создаёт подменю для 'Больничный'."""
+    keyboard = [
+        ['Я открыл больничный', 'Я закрыл больничный', 'Больничный продлен'],
+        ['Назад']
+    ]
+
+    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+
+def special_menu():
+    """Создаёт подменю для 'Специальных пользователей'."""
+    keyboard = [
+        ['Скачать таблицу', 'Очистить таблицу', ],
+        ['Закрасить строки', 'Оповестить всех', 'Внести в бан'],
+        ['Назад']
+    ]
+    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+
+async def ban_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Введите ID пользователя для бана:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return BAN_USER
+
+async def ban_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.text.strip()
+    if not user_id.isdigit():
+        await update.message.reply_text("ID должен быть числом. Попробуйте снова:")
+        return BAN_USER
+    context.user_data['ban_user_id'] = int(user_id)
+    await update.message.reply_text("Введите дату окончания блокировки (ДД.ММ.ГГГГ):")
+    return BAN_DATE
+
+def validate_date(date_text):
+    try:
+        datetime.strptime(date_text, '%d.%m.%Y')
+        return True
+    except ValueError:
+        return False
+
+async def ban_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    date_text = update.message.text.strip()
+    if not validate_date(date_text):
+        await update.message.reply_text(
+            "Неверный формат даты. Пожалуйста, введите дату в формате ДД.ММ.ГГГГ:"
+        )
+        return BAN_DATE
+    context.user_data['ban_end_date'] = date_text
+    await update.message.reply_text("Укажите причину блокировки:")
+    return BAN_REASON
+
+async def ban_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reason = update.message.text.strip()
+    if not reason:
+        await update.message.reply_text("Причина не может быть пустой. Укажите причину блокировки:")
+        return BAN_REASON
+    context.user_data['ban_reason'] = reason
+
+    # Сохранение в Excel
+    wb = openpyxl.load_workbook(EXCEL_FILE)
+    ws_banned = wb["Banned"]
+    ban_user_id = context.user_data['ban_user_id']
+
+    # Получение ФИО пользователя из листа "Users"
+    ws_users = wb["Users"]
+    fio = None
+    for row in ws_users.iter_rows(min_row=2, values_only=True):
+        if row[0] == ban_user_id:
+            fio = row[1]
+            break
+    if not fio:
+        await update.message.reply_text("Пользователь с таким ID не найден.")
+        return ConversationHandler.END
+
+    ws_banned.append([ban_user_id, fio, context.user_data['ban_end_date'], reason])
+    wb.save(EXCEL_FILE)
+
+    await update.message.reply_text("Пользователь успешно забанен!", reply_markup=main_menu(ban_user_id))
+    return ConversationHandler.END
+
+async def ban_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Процесс бана отменён.", reply_markup=main_menu(update.effective_user.id))
+    return ConversationHandler.END
+
+async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возвращает пользователя в главное меню."""
+    user_id = update.effective_user.id
+    await update.message.reply_text(
+        "Главное меню:",
+        reply_markup=main_menu(user_id)
+    )
 
 async def sick_leave_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает нажатие на кнопку 'Я открыл больничный'."""
     await update.message.reply_text("Введите дату следующего приёма (пример 21.10.2024):")
+    return SICK_LEAVE_OPEN_DATE
+
+async def sick_leave_return(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает нажатие на кнопку 'Больничный продлен'."""
+    await update.message.reply_text("Введите дату нового приёма (пример 17.12.2024):")
     return SICK_LEAVE_OPEN_DATE
 
 async def sick_leave_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -176,6 +303,30 @@ async def sick_leave_open_date(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text("Информация отправлена.", reply_markup=main_menu(user_id))
     return ConversationHandler.END
 
+async def download_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет файл data.xlsx специальному пользователю."""
+    user_id = update.effective_user.id
+    if user_id not in SPECIAL_USER_IDS:
+        await update.message.reply_text(
+            "У вас нет доступа к этой функции.",
+            reply_markup=main_menu(user_id)
+        )
+        return
+
+    if not os.path.exists(EXCEL_FILE):
+        await update.message.reply_text(
+            "Файл не найден.",
+            reply_markup=main_menu(user_id)
+        )
+        return
+
+    with open(EXCEL_FILE, 'rb') as file:
+        await update.message.reply_document(document=file, filename=EXCEL_FILE)
+
+    await update.message.reply_text(
+        "Файл отправлен.",
+        reply_markup=main_menu(user_id)
+    )
 
 async def clear_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает нажатие на кнопку 'Очистить таблицу'."""
@@ -202,7 +353,6 @@ async def clear_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при очистке таблицы: {e}")
         await update.message.reply_text(f"Произошла ошибка при очистке таблицы: {e}")
-
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена текущей операции."""
@@ -257,10 +407,11 @@ def get_user_fio(user_id):
 
 async def add_activity_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начинает процесс добавления активности."""
-    # Проверим, зарегистрирован ли пользователь
     user_id = update.effective_user.id
     wb = openpyxl.load_workbook(EXCEL_FILE)
     ws_users = wb["Users"]
+    ws_banned = wb["Banned"]
+
     fio = None
     registered = False
     for row in ws_users.iter_rows(min_row=2, values_only=True):
@@ -275,6 +426,29 @@ async def add_activity_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return ConversationHandler.END
 
+    # Проверка бана
+    today = datetime.today().date()
+    is_banned = False
+    ban_end_date = None
+    for row in ws_banned.iter_rows(min_row=2, values_only=True):
+        banned_user_id, _, end_date_str, _ = row
+        if banned_user_id == user_id:
+            try:
+                end_date = datetime.strptime(end_date_str, '%d.%m.%Y').date()
+                if today <= end_date:
+                    is_banned = True
+                    ban_end_date = end_date
+                    break
+            except ValueError:
+                continue
+
+    if is_banned:
+        await update.message.reply_text(
+            f"Вы забанены до {ban_end_date.strftime('%d.%m.%Y')}. "
+            "Вы не можете добавлять активности до окончания бана."
+        )
+        return ConversationHandler.END
+
     context.user_data['fio'] = fio  # Сохраняем ФИО пользователя для дальнейшего использования
 
     await update.message.reply_text(
@@ -282,7 +456,6 @@ async def add_activity_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=ReplyKeyboardRemove()
     )
     return DATE
-
 
 async def add_activity_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Сохраняет дату и запрашивает интервал."""
@@ -298,7 +471,6 @@ async def add_activity_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Пожалуйста, введите интервал активности (пример: СВУ с 12 до 13:45):"
     )
     return INTERVAL
-
 
 async def add_activity_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Сохраняет интервал и записывает данные в Excel."""
@@ -327,40 +499,136 @@ async def add_activity_interval(update: Update, context: ContextTypes.DEFAULT_TY
 
     return ConversationHandler.END
 
-
-def validate_date(date_text):
-    """Проверяет, соответствует ли дата формату ДД.ММ.ГГГГ."""
-    import datetime
-    try:
-        datetime.datetime.strptime(date_text, '%d.%m.%Y')
-        return True
-    except ValueError:
-        return False
-
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена процесса добавления активности или регистрации."""
+async def show_recorded_activities(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    await update.message.reply_text(
-        "Операция отменена.",
-        reply_markup=main_menu(user_id)
-    )
-    return ConversationHandler.END
+    wb = openpyxl.load_workbook(EXCEL_FILE)
+    ws_activities = wb["Activities"]
 
+    recorded_activities = []
+
+    # Определите, какая колонка отвечает за закрашенные ячейки.
+    # Предположим, что это колонка "Interval" (например, 4-я колонка)
+    INTERVAL_COLUMN_INDEX = 1
+
+    for row in ws_activities.iter_rows(min_row=2):  # Пропустить заголовок
+        row_user_id = row[0].value
+        if row_user_id != user_id:
+            continue
+
+        interval_cell = row[INTERVAL_COLUMN_INDEX - 1]  # Индексация с 0
+        fill = interval_cell.fill
+
+        # Проверим, есть ли цвет заливки (исключим пустую заливку)
+        if fill and fill.fgColor and fill.fgColor.type != 'none' and fill.fgColor.rgb != '00000000':
+            # Получаем необходимые данные, например: ФИО, дату и интервал
+            fio = row[1].value
+            date = row[2].value
+            interval = row[3].value
+            recorded_activities.append(f"Дата: {date}, Время: {interval}")
+
+    if not recorded_activities:
+        await update.message.reply_text("Пока ничего не проставили.")
+    else:
+        activities_text = "\n".join(recorded_activities)
+        await update.message.reply_text(f"Проставлено:\n{activities_text}", reply_markup=main_menu(user_id))
+
+    wb.close()
+
+async def color_rows_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начинает процесс закрашивания строк."""
+    await update.message.reply_text(
+        "Введите номер строки, до которой необходимо закрасить данные (целое число):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return COLOR_ROWS
+
+async def color_rows_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Закрашивает строки до указанного номера включительно в желтый цвет."""
+    row_input = update.message.text.strip()
+
+    if not row_input.isdigit():
+        await update.message.reply_text(
+            "Пожалуйста, введите корректное целое число для номера строки:"
+        )
+        return COLOR_ROWS
+
+    row_number = int(row_input)
+
+    if row_number < 2:
+        await update.message.reply_text(
+            "Минимально допустимый номер строки - 2."
+        )
+        return COLOR_ROWS
+
+    try:
+        wb = openpyxl.load_workbook(EXCEL_FILE)
+        ws_activities = wb["Activities"]
+
+        max_row = ws_activities.max_row
+        if row_number > max_row:
+            await update.message.reply_text(
+                f"В таблице только {max_row} строк. Будут закрашены все строки до {max_row}."
+            )
+            row_number = max_row
+
+        # Определяем желтый цвет
+        yellow_fill = PatternFill(start_color="FFFF00",
+                                  end_color="FFFF00",
+                                  fill_type="solid")
+
+        # Закрашиваем строки от 2 до row_number включительно (предполагая, что 1-я строка - заголовок)
+        for row in ws_activities.iter_rows(min_row=2, max_row=row_number, max_col=ws_activities.max_column):
+            for cell in row:
+                cell.fill = yellow_fill
+
+        wb.save(EXCEL_FILE)
+
+        await update.message.reply_text(
+            f"Строки с 2 по {row_number} успешно закрашены в желтый цвет.",
+            reply_markup=main_menu(update.effective_user.id)
+        )
+
+        return ConversationHandler.END
+
+    except Exception as e:
+        logger.error(f"Ошибка при закрашивании строк: {e}")
+        await update.message.reply_text(
+            "Произошла ошибка при обработке запроса. Пожалуйста, попробуйте позже."
+        )
+        return ConversationHandler.END
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает нажатие кнопок главного меню."""
     text = update.message.text
     user_id = update.effective_user.id
 
-    if text == 'Добавить активность':
-        return await add_activity_start(update, context)
-    elif text == 'Просмотреть активности':
-        return await view_activities_start(update, context)
-    elif text == 'Рассчитать оплату за час':
-        return await calc_salary_start(update, context)
+    if text == 'Активности':
+        await update.message.reply_text(
+            "Выберите действие в разделе 'Активности':",
+            reply_markup=activities_menu()
+        )
+    elif text == 'Больничный':
+        await update.message.reply_text(
+            "Выберите действие в разделе 'Больничный':",
+            reply_markup=sick_menu()
+        )
+    elif text == 'Особые действия':
+        await update.message.reply_text(
+            "Выберите действие в разделе для специальных пользователей:",
+            reply_markup=special_menu()
+        )
+    elif text == 'Оповестить всех':
+        await update.message.reply_text(
+            "Введите текст для отправки всем пользователям:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return NOTIFY_MESSAGE
     elif text == 'Скачать таблицу':
         return await download_table(update, context)
+    elif text == 'Назад':
+        await back_to_main_menu(update, context)
+    elif text == 'Отмена':
+        await cancel(update, context)
     else:
         await update.message.reply_text(
             "Пожалуйста, используйте кнопки меню.",
@@ -375,13 +643,56 @@ async def transfer_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return INTERVAL_INPUT
 
+async def notify_all_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начинает процесс отправки уведомления всем пользователям."""
+    user_id = update.effective_user.id
+    if user_id not in SPECIAL_USER_IDS:
+        await update.message.reply_text("У вас нет прав для выполнения этого действия.")
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        "Введите текст для отправки всем пользователям:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return NOTIFY_MESSAGE
+
+async def notify_all_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет введённое сообщение всем зарегистрированным пользователям."""
+    user_id = update.effective_user.id
+    text = update.message.text
+
+    users = get_users()
+
+    if not users:
+        await update.message.reply_text("Список пользователей пуст.")
+        return ConversationHandler.END
+
+    sent_count = 0
+    failed_users = []
+
+    for uid in users:
+        try:
+            await context.bot.send_message(chat_id=uid, text=text)
+            sent_count += 1
+        except Exception as e:
+            failed_users.append(uid)
+            print(f"Не удалось отправить сообщение пользователю {uid}: {e}")
+
+    response = f"Сообщение отправлено {sent_count} из {len(users)} пользователей."
+    if failed_users:
+        response += f"\nНе удалось отправить сообщение следующим пользователям: {failed_users}"
+    await update.message.reply_text(response)
+
+    # Возвращаемся в главное меню
+    await back_to_main_menu(update, context)
+    return ConversationHandler.END
 
 async def interval_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получает введенный интервал и сохраняет его."""
     interval = update.message.text.strip()
     user_id = update.effective_user.id
     fio = get_user_fio(user_id)
-    date = datetime.datetime.now()
+    date = datetime.now()
 
     if not interval:
         await update.message.reply_text(
@@ -428,32 +739,21 @@ async def view_activities_start(update: Update, context: ContextTypes.DEFAULT_TY
     return ConversationHandler.END
 
 async def calc_salary_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начинает процесс расчета оплаты за час."""
+    """Начинает процесс расчета оплаты за час, устанавливая фиксированный оклад."""
     user_id = update.effective_user.id
+
+    # Устанавливаем оклад в зависимости от того, является ли пользователь специальным
+    if user_id in SPECIAL_USER_IDS:
+        fixed_salary = 51000  # Фиксированный оклад для специальных пользователей
+    else:
+        fixed_salary = 40329.6  # Стандартный фиксированный оклад
+
+    context.user_data['salary'] = fixed_salary
+
     await update.message.reply_text(
-        "Введите ваш оклад с учетом северных и районных (голый оклад*1.6):",
+        f"Фиксированный оклад установлен: {fixed_salary} ₽\n"
+        "Введите норму часов в месяце: (узнать по ссылке https://www.consultant.ru/law/ref/calendar/proizvodstvennye/)",
         reply_markup=ReplyKeyboardRemove()
-    )
-    return CALC_SALARY
-
-async def calc_salary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохраняет оклад и запрашивает норму часов."""
-    salary_text = update.message.text.strip()
-    try:
-        salary = float(salary_text.replace(',', '.'))
-        if salary <= 0:
-            raise ValueError
-        context.user_data['salary'] = salary
-    except ValueError:
-        user_id = update.effective_user.id
-        await update.message.reply_text(
-            "Пожалуйста, введите правильное числовое значение оклада:"
-        )
-        return CALC_SALARY
-
-    user_id = update.effective_user.id
-    await update.message.reply_text(
-        "Введите норму часов в месяце:",
     )
     return CALC_HOURS
 
@@ -468,7 +768,7 @@ async def calc_hours(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         user_id = update.effective_user.id
         await update.message.reply_text(
-            "Пожалуйста, введите правильное числовое значение нормы часов:"
+            "Пожалуйста, введите правильное числовое значение нормы часов :"
         )
         return CALC_HOURS
 
@@ -491,31 +791,7 @@ async def calc_hours(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message, reply_markup=main_menu(user_id))
     return ConversationHandler.END
 
-async def download_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет файл data.xlsx специальному пользователю."""
-    user_id = update.effective_user.id
-    if user_id not in SPECIAL_USER_IDS:
-        await update.message.reply_text(
-            "У вас нет доступа к этой функции.",
-            reply_markup=main_menu(user_id)
-        )
-        return
-
-    if not os.path.exists(EXCEL_FILE):
-        await update.message.reply_text(
-            "Файл не найден.",
-            reply_markup=main_menu(user_id)
-        )
-        return
-
-    with open(EXCEL_FILE, 'rb') as file:
-        await update.message.reply_document(document=file, filename=EXCEL_FILE)
-
-    await update.message.reply_text(
-        "Файл отправлен.",
-        reply_markup=main_menu(user_id)
-    )
-
+#CАМОЕ ГЛАВНОЕ В РАБОТЕ БОТА
 def main():
     """Основная функция для запуска бота."""
     # Получите ваш токен от @BotFather и вставьте ниже
@@ -523,6 +799,27 @@ def main():
 
     application = ApplicationBuilder().token(TOKEN).build()
 
+    application.add_handler(MessageHandler(filters.Regex('^Проставленные активности$'), show_recorded_activities))
+    # Обработчик Conversation для "Внести в бан"
+    ban_conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Внести в бан$"), ban_start)],
+        states={
+            BAN_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, ban_user_id)],
+            BAN_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ban_date)],
+            BAN_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, ban_reason)],
+        },
+        fallbacks=[CommandHandler('cancel', ban_cancel)],
+    )
+
+    # Обработчик Conversation для "Оповестить всех"
+    notify_conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Оповестить всех$"), notify_all_start)],
+        states={
+            NOTIFY_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_all_message)]
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+        allow_reentry=True
+    )
     # ConversationHandler для регистрации
     register_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -542,6 +839,14 @@ def main():
         per_user=True,
         per_chat=True,
     )
+    # ConversationHandler для добавления активности и закрашивания строк
+    conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Закрасить строки$"), color_rows_start)],
+        states={
+            COLOR_ROWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, color_rows_process)],
+        },
+        fallbacks=[CommandHandler('cancel', lambda update, context: ConversationHandler.END)],
+    )
 
     # ConversationHandler для добавления активности
     add_activity_handler = ConversationHandler(
@@ -555,7 +860,7 @@ def main():
 
     # ConversationHandler для просмотра активностей
     view_activities_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^(Просмотреть активности)$'), view_activities_start)],
+        entry_points=[MessageHandler(filters.Regex('^(Внесенные активности)$'), view_activities_start)],
         states={
             VIEW: [MessageHandler(filters.ALL, handle_message)],
         },
@@ -566,7 +871,6 @@ def main():
     calc_salary_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^(Рассчитать оплату за час)$'), calc_salary_start)],
         states={
-            CALC_SALARY: [MessageHandler(filters.TEXT & ~filters.COMMAND, calc_salary)],
             CALC_HOURS: [MessageHandler(filters.TEXT & ~filters.COMMAND, calc_hours)],
         },
         fallbacks=[CommandHandler('cancel', cancel)],
@@ -584,13 +888,25 @@ def main():
         },
         fallbacks=[CommandHandler('cancel', cancel)],
     )
-    application.add_handler(sick_leave_open_handler)
+    #Обработчик для кнопки "Больничный продлен"
+    sick_leave_return_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^Больничный продлен$'), sick_leave_open)],
+        states={
+            SICK_LEAVE_OPEN_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, sick_leave_open_date)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
 
     # Обработчик для кнопки "Я закрыл больничный"
     sick_leave_close_handler = MessageHandler(
         filters.Regex('^Я закрыл больничный$'), sick_leave_close
     )
     # Обработчик сообщений для главного меню
+    application.add_handler(ban_conv_handler)
+    application.add_handler(notify_conv_handler)
+    application.add_handler(sick_leave_return_handler)
+    application.add_handler(sick_leave_open_handler)
+    application.add_handler(conv_handler)
     application.add_handler(sick_leave_close_handler)
     application.add_handler(clear_table_handler)
     application.add_handler(transfer_activity_handler)
@@ -604,7 +920,6 @@ def main():
 
     # Добавляем обработчик для команды /cancel
     application.add_handler(CommandHandler('cancel', cancel))
-
     # Запуск бота
     application.run_polling()
 
