@@ -27,19 +27,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Константы состояний для ConversationHandler
-REGISTER, DATE, INTERVAL, VIEW, CALC_HOURS, TRANSFER_ACTIVITY, INTERVAL_INPUT, SICK_LEAVE_OPEN_DATE, COLOR_ROWS, NOTIFY_MESSAGE,BAN_USER, BAN_DATE, BAN_REASON, ACTIVITY, RESULT = range(15)
+REGISTER, DATE, INTERVAL, VIEW, CALC_HOURS, TRANSFER_ACTIVITY, INTERVAL_INPUT, SICK_LEAVE_OPEN_DATE, COLOR_ROWS, NOTIFY_MESSAGE,BAN_USER, BAN_DATE, BAN_REASON, ACTIVITY, RESULT, ENTER_ACTIVITY_USER_ID, ENTER_ACTIVITY_FIO, ENTER_ACTIVITY_DATE, ENTER_ACTIVITY_INTERVAL = range(19)
 # Новые константы для редактирования
 EDIT_SELECT_ACTIVITY, EDIT_FIELD, EDIT_VALUE, RENAME = range(4)
 # Новые константы для удаления
-DELETE_SELECT_ACTIVITY, DELETE_CONFIRM = range(2)
-
+DELETE_SELECT_ACTIVITY, DELETE_CONFIRM, ADD_OLDER_USER, REMOVE_OLDER_USER, DELETE_ANY_ACTIVITY_ROW = range(5)
+# Новые константы для ввода данных и удаления
+ENTER_DATA_ID, ENTER_DATA_FIO, DELETE_USER_ROW = range(3)
 # Путь к Excel-файлу
 EXCEL_FILE = 'data.xlsx'
 
 # Список специальных user IDs для доступа к новой функции
 SPECIAL_USER_IDS = [461549398,402468895,1352307342]
-OLDER_USERS = [386228479,464573378,1281673648]
-
 DAYS_RU = {
     0: 'понедельник',
     1: 'вторник',
@@ -59,11 +58,9 @@ def init_excel():
         ws_users = wb.active
         ws_users.title = "Users"
         ws_users.append(["UserID", "ФИО"])
-
         # Создание второго листа "Activities"
         ws_activities = wb.create_sheet(title="Activities")
         ws_activities.append(["UserID", "ФИО", "Дата", "Интервал"])
-
         # Создание листа "Transfers" для переноса активности
         ws_transfers = wb.create_sheet(title="Transfers")
         ws_transfers.append(["UserID", "ФИО", "Дата", "Интервал"])
@@ -73,6 +70,9 @@ def init_excel():
         # Создание четвертого листа "Пройденные активности"
         ws_training = wb.create_sheet("Training")
         ws_training.append(["UserID", "ФИО", "Активность", "Статус"])
+        #Пятый лист со старшими
+        ws_older_users = wb.create_sheet("OlderUsers")
+        ws_older_users.append(["UserID"])
 
         wb.save(EXCEL_FILE)
 #Считывает список зарегистрированных пользователей из листа "Users" Excel-файла
@@ -137,6 +137,9 @@ def main_menu(user_id):
     # Добавляем кнопку "Особых действий" только для специальных пользователей
     if user_id in SPECIAL_USER_IDS:
         keyboard.append(['Особые действия'])
+    older_users = get_older_users()
+    if user_id in older_users:
+        keyboard.append(['Меню для старших'])
 
     # Добавляем кнопку отмены
     keyboard.append(['Отмена'])
@@ -149,6 +152,20 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Главное меню:",
         reply_markup=main_menu(user_id)
+    )
+#Меню для старших
+def senior_menu():
+    """Создаёт меню для старших пользователей."""
+    keyboard = [
+        ['Скачать таблицу', 'Закрасить строки'],
+        ['Назад']
+    ]
+    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+async def senior_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает нажатие кнопки 'Меню для старших'."""
+    await update.message.reply_text(
+        "Меню для старших:",
+        reply_markup=senior_menu()
     )
 #Создаёт подменю для 'Активности
 def activities_menu():
@@ -174,11 +191,163 @@ def sick_menu():
 def special_menu():
     """Создаёт подменю для 'Специальных пользователей'."""
     keyboard = [
-        ['Скачать таблицу', 'Очистить таблицу', ],
+        ['Скачать таблицу', 'Очистить таблицу', 'Внести данные'],
         ['Закрасить строки', 'Оповестить всех', 'Внести в бан'],
+        ['Удалить пользователя','Добавить старшего','Удалить старшего'],
+        ['Удалить активность','Внести активность'],
         ['Назад']
     ]
     return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+#Старшие спецы сохранены тут
+def get_older_users():
+    """Получает список ID пользователей OLDER_USERS из листа 'OlderUsers'."""
+    wb = openpyxl.load_workbook(EXCEL_FILE)
+    ws_older_users = wb["OlderUsers"]
+    older_users = []
+    for row in ws_older_users.iter_rows(min_row=2, values_only=True):
+        user_id = row[0]
+        if isinstance(user_id, int):
+            older_users.append(user_id)
+    return older_users
+def add_older_user(user_id):
+    """Добавляет ID пользователя в лист 'OlderUsers'."""
+    wb = openpyxl.load_workbook(EXCEL_FILE)
+    ws_older_users = wb["OlderUsers"]
+    ws_older_users.append([user_id])
+    wb.save(EXCEL_FILE)
+def remove_older_user(user_id):
+    """Удаляет ID пользователя из листа 'OlderUsers'."""
+    wb = openpyxl.load_workbook(EXCEL_FILE)
+    ws_older_users = wb["OlderUsers"]
+    for row in ws_older_users.iter_rows(min_row=2, max_row=ws_older_users.max_row):
+        if row[0].value == user_id:
+            ws_older_users.delete_rows(row[0].row, 1)
+            wb.save(EXCEL_FILE)
+            break
+# Обработчик для начала процесса ввода данных пользователя на лист "Activities"
+async def enter_activity_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начинает процесс ввода данных пользователя на лист 'Activities'."""
+    await update.message.reply_text(
+        "Введите ID пользователя:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ENTER_ACTIVITY_USER_ID
+# Функция для ввода ID пользователя
+async def enter_activity_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняет ID пользователя и запрашивает ФИО."""
+    user_id = update.message.text.strip()
+    if not user_id.isdigit():
+        await update.message.reply_text(
+            "ID должен быть числом. Пожалуйста, введите корректный ID:"
+        )
+        return ENTER_ACTIVITY_USER_ID
+    context.user_data['enter_activity_user_id'] = int(user_id)
+    await update.message.reply_text(
+        "Введите ФИО пользователя:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ENTER_ACTIVITY_FIO
+# Функция для ввода ФИО пользователя
+async def enter_activity_fio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняет ФИО пользователя и запрашивает дату."""
+    fio = update.message.text.strip()
+    if not fio:
+        await update.message.reply_text(
+            "ФИО не может быть пустым. Пожалуйста, введите ФИО пользователя:"
+        )
+        return ENTER_ACTIVITY_FIO
+    context.user_data['enter_activity_fio'] = fio
+    await update.message.reply_text(
+        "Введите дату активности в формате ДД.ММ.ГГГГ:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ENTER_ACTIVITY_DATE
+# Функция для ввода даты активности
+async def enter_activity_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняет дату и запрашивает интервал."""
+    date_text = update.message.text.strip()
+    if not validate_date(date_text):
+        await update.message.reply_text(
+            "Неверный формат даты. Пожалуйста, введите дату в формате ДД.ММ.ГГГГ:"
+        )
+        return ENTER_ACTIVITY_DATE
+    context.user_data['enter_activity_date'] = date_text
+    await update.message.reply_text(
+        "Пожалуйста, введите интервал активности (пример: СВУ с 12 до 13:45):"
+    )
+    return ENTER_ACTIVITY_INTERVAL
+# Функция для ввода интервала активности
+async def enter_activity_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняет интервал и записывает данные в Excel."""
+    interval = update.message.text.strip()
+    if not interval:
+        await update.message.reply_text(
+            "Интервал не может быть пустым. Пожалуйста, введите интервал активности:"
+        )
+        return ENTER_ACTIVITY_INTERVAL
+    user_id = context.user_data.get('enter_activity_user_id')
+    fio = context.user_data.get('enter_activity_fio')
+    date = context.user_data.get('enter_activity_date')
+    if not all([user_id, fio, date]):
+        await update.message.reply_text(
+            "Ошибка при получении данных. Попробуйте снова.",
+            reply_markup=main_menu(update.effective_user.id)
+        )
+        return ConversationHandler.END
+    # Записываем данные в Excel
+    wb = openpyxl.load_workbook(EXCEL_FILE)
+    ws_activities = wb["Activities"]
+    ws_activities.append([user_id, fio, date, interval])
+    wb.save(EXCEL_FILE)
+    await update.message.reply_text(
+        f"Данные пользователя с ID {user_id} успешно внесены!",
+        reply_markup=main_menu(update.effective_user.id)
+    )
+    return ConversationHandler.END
+async def add_older_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начинает процесс добавления ID пользователя в OLDER_USERS."""
+    await update.message.reply_text(
+        "Введите ID пользователя для добавления в OLDER_USERS:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ADD_OLDER_USER
+async def add_older_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Добавляет ID пользователя в OLDER_USERS."""
+    user_id = update.message.text.strip()
+    if not user_id.isdigit():
+        await update.message.reply_text(
+            "ID должен быть числом. Пожалуйста, введите корректный ID:"
+        )
+        return ADD_OLDER_USER
+    user_id = int(user_id)
+    add_older_user(user_id)
+    await update.message.reply_text(
+        f"ID пользователя {user_id} успешно добавлен в OLDER_USERS.",
+        reply_markup=main_menu(update.effective_user.id)
+    )
+    return ConversationHandler.END
+async def remove_older_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начинает процесс удаления ID пользователя из OLDER_USERS."""
+    await update.message.reply_text(
+        "Введите ID пользователя для удаления из OLDER_USERS:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return REMOVE_OLDER_USER
+async def remove_older_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет ID пользователя из OLDER_USERS."""
+    user_id = update.message.text.strip()
+    if not user_id.isdigit():
+        await update.message.reply_text(
+            "ID должен быть числом. Пожалуйста, введите корректный ID:"
+        )
+        return REMOVE_OLDER_USER
+    user_id = int(user_id)
+    remove_older_user(user_id)
+    await update.message.reply_text(
+        f"ID пользователя {user_id} успешно удален из OLDER_USERS.",
+        reply_markup=main_menu(update.effective_user.id)
+    )
+    return ConversationHandler.END
 #Сохраняет ФИО пользователя и завершает регистрацию
 async def register_fio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Сохраняет ФИО пользователя и завершает регистрацию."""
@@ -213,6 +382,147 @@ async def register_fio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu(user_id)
     )
     return ConversationHandler.END
+#Внесение данных за пользователя
+async def enter_data_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начинает процесс ввода данных пользователя."""
+    await update.message.reply_text(
+        "Введите ID пользователя:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ENTER_DATA_ID
+async def enter_data_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняет ID пользователя и запрашивает ФИО."""
+    user_id = update.message.text.strip()
+    if not user_id.isdigit():
+        await update.message.reply_text(
+            "ID должен быть числом. Пожалуйста, введите корректный ID:"
+        )
+        return ENTER_DATA_ID
+    context.user_data['enter_user_id'] = int(user_id)
+    await update.message.reply_text(
+        "Введите ФИО пользователя:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ENTER_DATA_FIO
+async def enter_data_fio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняет ФИО пользователя и завершает ввод данных."""
+    fio = update.message.text.strip()
+    if not fio:
+        await update.message.reply_text(
+            "ФИО не может быть пустым. Пожалуйста, введите ФИО пользователя:"
+        )
+        return ENTER_DATA_FIO
+    user_id = context.user_data.get('enter_user_id')
+    if not user_id:
+        await update.message.reply_text(
+            "Ошибка при получении ID пользователя. Попробуйте снова.",
+            reply_markup=main_menu(update.effective_user.id)
+        )
+        return ConversationHandler.END
+    # Записываем данные в Excel
+    wb = openpyxl.load_workbook(EXCEL_FILE)
+    ws_users = wb["Users"]
+    ws_users.append([user_id, fio])
+    wb.save(EXCEL_FILE)
+    await update.message.reply_text(
+        f"Данные пользователя с ID {user_id} успешно внесены!",
+        reply_markup=main_menu(update.effective_user.id)
+    )
+    return ConversationHandler.END
+#Удаление любой активности в файле
+async def delete_any_activity_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начинает процесс удаления строки на листе 'Activities'."""
+    await update.message.reply_text(
+        "Введите номер строки, которую хотите удалить:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return DELETE_ANY_ACTIVITY_ROW
+# Функция для удаления строки на листе "Activities"
+async def delete_any_activity_row(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет строку на листе 'Activities' по указанному номеру."""
+    row_number = update.message.text.strip()
+    if not row_number.isdigit():
+        await update.message.reply_text(
+            "Номер строки должен быть числом. Пожалуйста, введите корректный номер строки:"
+        )
+        return DELETE_ANY_ACTIVITY_ROW
+
+    row_number = int(row_number)
+    if row_number < 2:
+        await update.message.reply_text(
+            "Минимально допустимый номер строки - 2."
+        )
+        return DELETE_ANY_ACTIVITY_ROW
+
+    try:
+        wb = openpyxl.load_workbook(EXCEL_FILE)
+        ws_activities = wb["Activities"]
+        max_row = ws_activities.max_row
+        if row_number > max_row:
+            await update.message.reply_text(
+                f"В таблице только {max_row} строк. Введите корректный номер строки."
+            )
+            return DELETE_ANY_ACTIVITY_ROW
+
+        ws_activities.delete_rows(row_number, 1)
+        wb.save(EXCEL_FILE)
+        await update.message.reply_text(
+            f"Строка {row_number} успешно удалена.",
+            reply_markup=main_menu(update.effective_user.id)
+        )
+        return ConversationHandler.END
+    except Exception as e:
+        logger.error(f"Ошибка при удалении строки: {e}")
+        await update.message.reply_text(
+            "Произошла ошибка при удалении строки. Попробуйте снова.",
+            reply_markup=main_menu(update.effective_user.id)
+        )
+        return ConversationHandler.END
+#Удаление пользователя
+async def delete_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начинает процесс удаления пользователя."""
+    await update.message.reply_text(
+        "Введите номер строки пользователя, которого хотите удалить:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return DELETE_USER_ROW
+async def delete_user_row(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет пользователя по номеру строки."""
+    row_number = update.message.text.strip()
+    if not row_number.isdigit():
+        await update.message.reply_text(
+            "Номер строки должен быть числом. Пожалуйста, введите корректный номер строки:"
+        )
+        return DELETE_USER_ROW
+    row_number = int(row_number)
+    if row_number < 2:
+        await update.message.reply_text(
+            "Минимально допустимый номер строки - 2."
+        )
+        return DELETE_USER_ROW
+    try:
+        wb = openpyxl.load_workbook(EXCEL_FILE)
+        ws_users = wb["Users"]
+        max_row = ws_users.max_row
+        if row_number > max_row:
+            await update.message.reply_text(
+                f"В таблице только {max_row} строк. Введите корректный номер строки."
+            )
+            return DELETE_USER_ROW
+        ws_users.delete_rows(row_number, 1)
+        wb.save(EXCEL_FILE)
+        await update.message.reply_text(
+            f"Пользователь в строке {row_number} успешно удален.",
+            reply_markup=main_menu(update.effective_user.id)
+        )
+        return ConversationHandler.END
+    except Exception as e:
+        logger.error(f"Ошибка при удалении пользователя: {e}")
+        await update.message.reply_text(
+            "Произошла ошибка при удалении пользователя. Попробуйте снова.",
+            reply_markup=main_menu(update.effective_user.id)
+        )
+        return ConversationHandler.END
 #Инициализирует процесс переименования пользователя.
 async def rename_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Инициализирует процесс переименования пользователя."""
@@ -610,6 +920,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Выберите действие в разделе для специальных пользователей:",
             reply_markup=special_menu()
+        )
+    elif text == 'Меню для старших':
+        await update.message.reply_text(
+            "Выберите действие в разделе для старших специалистов:",
+            reply_markup=senior_menu()
         )
     elif text == 'Оповестить всех':
         await update.message.reply_text(
@@ -1121,19 +1436,20 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def calc_salary_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начинает процесс расчета оплаты за час, устанавливая фиксированный оклад."""
     user_id = update.effective_user.id
-
     # Устанавливаем оклад в зависимости от того, является ли пользователь специальным
     if user_id in SPECIAL_USER_IDS:
         fixed_salary = 51000  # Фиксированный оклад для специальных пользователей
     else:
         fixed_salary = 40329.6  # Стандартный фиксированный оклад
-    if user_id in OLDER_USERS:
+
+    # Загружаем список OLDER_USERS
+    older_users = get_older_users()
+    if user_id in older_users:
         fixed_salary = 45326  # Фиксированный оклад для старших спецов
 
     context.user_data['salary'] = fixed_salary
-
     await update.message.reply_text(
-        f"Фиксированный оклад установлен: {fixed_salary} ₽\n"
+        f"Фиксированный оклад установлен: {fixed_salary} P \n"
         "Введите норму часов в месяце: (узнать по ссылке https://www.consultant.ru/law/ref/calendar/proizvodstvennye/)",
         reply_markup=ReplyKeyboardRemove()
     )
@@ -1208,6 +1524,14 @@ def main():
         states={
 
             REGISTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_fio)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+    # ConversationHandler для удаления строки на листе "Activities"
+    delete_any_activity_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^Удалить активность$'), delete_any_activity_start)],
+        states={
+            DELETE_ANY_ACTIVITY_ROW: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_any_activity_row)],
         },
         fallbacks=[CommandHandler('cancel', cancel)],
     )
@@ -1312,12 +1636,61 @@ def main():
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
+    # ConversationHandler для ввода данных пользователя
+    enter_data_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Внести данные$"), enter_data_start)],
+        states={
+            ENTER_DATA_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_data_id)],
+            ENTER_DATA_FIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_data_fio)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
     # Обработчик для кнопки "Я закрыл больничный"
     sick_leave_close_handler = MessageHandler(
         filters.Regex('^Я закрыл больничный$'), sick_leave_close
     )
-    # Обработчик сообщений для главного меню
+    delete_user_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Удалить пользователя$"), delete_user_start)],
+        states={
+            DELETE_USER_ROW: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_user_row)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+    add_older_user_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Добавить старшего$"), add_older_user_start)],
+        states={
+            ADD_OLDER_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_older_user_id)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
 
+    # ConversationHandler для удаления ID OLDER_USERS
+    remove_older_user_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Удалить старшего$"), remove_older_user_start)],
+        states={
+            REMOVE_OLDER_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, remove_older_user_id)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+    # ConversationHandler для ввода данных пользователя на лист "Activities"
+    enter_activity_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^Внести активность$'), enter_activity_start)],
+        states={
+            ENTER_ACTIVITY_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_activity_user_id)],
+            ENTER_ACTIVITY_FIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_activity_fio)],
+            ENTER_ACTIVITY_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_activity_date)],
+            ENTER_ACTIVITY_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_activity_interval)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+
+    # Обработчик сообщений для главного меню
+    application.add_handler(enter_activity_handler)
+    application.add_handler(delete_any_activity_handler)
+    application.add_handler(add_older_user_handler)
+    application.add_handler(remove_older_user_handler)
+    application.add_handler(delete_user_handler)
+    application.add_handler(enter_data_handler)
     application.add_handler(training_activity_handler)
     application.add_handler(rename_handler_start)
     application.add_handler(ban_conv_handler)
