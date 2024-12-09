@@ -34,7 +34,7 @@ EDIT_SELECT_ACTIVITY, EDIT_FIELD, EDIT_VALUE, RENAME = range(4)
 DELETE_SELECT_ACTIVITY, DELETE_CONFIRM = range(2)
 
 # Путь к Excel-файлу
-EXCEL_FILE = ' /app/data/data.xlsx'
+EXCEL_FILE = 'data.xlsx'
 
 # Список специальных user IDs для доступа к новой функции
 SPECIAL_USER_IDS = [461549398,402468895,1352307342]
