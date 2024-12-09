@@ -1377,7 +1377,7 @@ async def sick_leave_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def download_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправляет файл data.xlsx специальному пользователю."""
     user_id = update.effective_user.id
-    if user_id not in SPECIAL_USER_IDS:
+    if user_id not in SPECIAL_USER_IDS and user_id not in get_older_users():
         await update.message.reply_text(
             "У вас нет доступа к этой функции.",
             reply_markup=main_menu(user_id)
