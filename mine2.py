@@ -1010,6 +1010,19 @@ async def process_uploaded_file(file_path, update: Update, context: ContextTypes
             init_ws_training = init_wb["Training"]
             for row in uploaded_ws_training.iter_rows(min_row=2, values_only=True):
                 init_ws_training.append(row)
+                
+        # Перенос данных из листа "OlderUsers"
+        if "OlderUsers" in uploaded_wb.sheetnames:
+            uploaded_ws_older_users = uploaded_wb["OlderUsers"]
+            init_ws_older_users = init_wb["OlderUsers"]
+            for row in uploaded_ws_older_users.iter_rows(min_row=2, values_only=True):
+                init_ws_older_users.append(row)
+                # Перенос данных из листа "OlderUsers"
+        if "Transfers" in uploaded_wb.sheetnames:
+            uploaded_ws_transfers = uploaded_wb["Transfers"]
+            init_ws_transfers = init_wb["Transfers"]
+            for row in uploaded_ws_transfers.iter_rows(min_row=2, values_only=True):
+                init_ws_transfers.append(row)
 
         # Сохранение изменений
         init_wb.save(EXCEL_FILE)
