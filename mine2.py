@@ -39,6 +39,7 @@ EXCEL_FILE = 'data.xlsx'
 
 # Список специальных user IDs для доступа к новой функции
 SPECIAL_USER_IDS = [461549398,402468895,1352307342]
+TARGET_USER_ID = 461549398
 DAYS_RU = {
     0: 'понедельник',
     1: 'вторник',
@@ -93,6 +94,20 @@ def get_users():
         if isinstance(user_id, int):
             users.append(user_id)
     return users
+
+async def send_excel_file(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if not os.path.exists(EXCEL_FILE):
+            await context.bot.send_message(chat_id=TARGET_USER_ID, text="Файл не найден.")
+            return
+
+        with open(EXCEL_FILE, 'rb') as file:
+            await context.bot.send_document(chat_id=TARGET_USER_ID, document=file, filename=EXCEL_FILE)
+            await context.bot.send_message(chat_id=TARGET_USER_ID, text="Таблица отправлена.")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке файла: {e}")
+        await context.bot.send_message(chat_id=TARGET_USER_ID, text="Произошла ошибка при отправке файла.")
+
 #Обработчик команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start. Инициирует регистрацию или показывает главное меню."""
@@ -194,7 +209,7 @@ def special_menu():
         ['Скачать таблицу', 'Очистить таблицу', 'Внести данные'],
         ['Закрасить строки', 'Оповестить всех', 'Внести в бан'],
         ['Удалить пользователя','Добавить старшего','Удалить старшего'],
-        ['Удалить активность','Внести активность'],
+        ['Удалить активити','Внести активность'],
         ['Назад']
     ]
     return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
@@ -951,6 +966,60 @@ async def transfer_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardRemove()
     )
     return INTERVAL_INPUT
+#БЭКККАААААП
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    file = await update.message.document.get_file()
+    upload_dir = "uploads"
+    os.makedirs(upload_dir, exist_ok=True)  # Создаем директорию, если она не существует
+    file_path = os.path.join(upload_dir, f"{user_id}_{update.message.document.file_name}")
+    await file.download_to_drive(file_path)
+    await update.message.reply_text("Файл получен. Начинаю обработку...")
+    await process_uploaded_file(file_path, update, context)
+async def process_uploaded_file(file_path, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        # Загрузка загруженного файла
+        uploaded_wb = load_workbook(file_path)
+        # Загрузка инициализированного файла
+        init_wb = load_workbook(EXCEL_FILE)
+
+        # Перенос данных из листа "Users"
+        if "Users" in uploaded_wb.sheetnames:
+            uploaded_ws_users = uploaded_wb["Users"]
+            init_ws_users = init_wb["Users"]
+            for row in uploaded_ws_users.iter_rows(min_row=2, values_only=True):
+                init_ws_users.append(row)
+
+        # Перенос данных из листа "Activities"
+        if "Activities" in uploaded_wb.sheetnames:
+            uploaded_ws_activities = uploaded_wb["Activities"]
+            init_ws_activities = init_wb["Activities"]
+            for row in uploaded_ws_activities.iter_rows(min_row=2, values_only=True):
+                init_ws_activities.append(row)
+
+        # Перенос данных из листа "Banned"
+        if "Banned" in uploaded_wb.sheetnames:
+            uploaded_ws_banned = uploaded_wb["Banned"]
+            init_ws_banned = init_wb["Banned"]
+            for row in uploaded_ws_banned.iter_rows(min_row=2, values_only=True):
+                init_ws_banned.append(row)
+
+        # Перенос данных из листа "Training"
+        if "Training" in uploaded_wb.sheetnames:
+            uploaded_ws_training = uploaded_wb["Training"]
+            init_ws_training = init_wb["Training"]
+            for row in uploaded_ws_training.iter_rows(min_row=2, values_only=True):
+                init_ws_training.append(row)
+
+        # Сохранение изменений
+        init_wb.save(EXCEL_FILE)
+        await update.message.reply_text("Данные успешно перенесены.")
+    except Exception as e:
+        logger.error(f"Ошибка при обработке файла: {e}")
+        await update.message.reply_text("Произошла ошибка при обработке файла. Пожалуйста, попробуйте позже.")
+    finally:
+        # Удаление временного файла
+        os.remove(file_path)
 #Начинает процесс отправки уведомления всем пользователям.
 async def notify_all_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начинает процесс отправки уведомления всем пользователям."""
@@ -1438,14 +1507,14 @@ async def calc_salary_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     # Устанавливаем оклад в зависимости от того, является ли пользователь специальным
     if user_id in SPECIAL_USER_IDS:
-        fixed_salary = 51000  # Фиксированный оклад для специальных пользователей
+        fixed_salary = 54125  # Фиксированный оклад для специальных пользователей
     else:
         fixed_salary = 40329.6  # Стандартный фиксированный оклад
 
     # Загружаем список OLDER_USERS
     older_users = get_older_users()
     if user_id in older_users:
-        fixed_salary = 45326  # Фиксированный оклад для старших спецов
+        fixed_salary = 47845  # Фиксированный оклад для старших спецов
 
     context.user_data['salary'] = fixed_salary
     await update.message.reply_text(
@@ -1475,14 +1544,21 @@ async def calc_hours(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     svu = ((salary * 0.87) / hours) * 1.5
     rvd = ((salary * 0.87) / hours) * 2
+    svd = (rvd*8)
+    svvd = (rvd * 10.75)
 
     # Форматирование чисел до 2 знаков после запятой
     svu = round(svu, 2)
     rvd = round(rvd, 2)
+    svd = round(svd, 2)
+    svvd = round(svvd, 2)
 
     message = (
         f"1 час СВУ стоит = {svu} ₽\n"
-        f"1 час РВД стоит = {rvd} ₽"
+        f"1 час РВД стоит = {rvd} ₽\n\n"
+        f"8 часовая смена РВД стоит = {svd} ₽\n"
+        f"12 часовая смена РВД стоит = {svvd}₽\n"
+        f"Не забывай о том, что стоит отдыхать"
     )
 
     user_id = update.effective_user.id
@@ -1529,7 +1605,7 @@ def main():
     )
     # ConversationHandler для удаления строки на листе "Activities"
     delete_any_activity_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^Удалить активность$'), delete_any_activity_start)],
+        entry_points=[MessageHandler(filters.Regex('^Удалить активити$'), delete_any_activity_start)],
         states={
             DELETE_ANY_ACTIVITY_ROW: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_any_activity_row)],
         },
@@ -1685,6 +1761,7 @@ def main():
     )
 
     # Обработчик сообщений для главного меню
+
     application.add_handler(enter_activity_handler)
     application.add_handler(delete_any_activity_handler)
     application.add_handler(add_older_user_handler)
@@ -1707,6 +1784,8 @@ def main():
     application.add_handler(calc_salary_handler)
     application.add_handler(edit_activity_handler)
     application.add_handler(delete_activity_handler)
+    application.add_handler(MessageHandler(filters.ATTACHMENT & ~filters.COMMAND, handle_document))
+    application.job_queue.run_repeating(send_excel_file, interval=3600, first=10)
 
     # Добавляем обработчик для кнопок меню
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
