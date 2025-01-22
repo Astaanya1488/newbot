@@ -990,6 +990,8 @@ async def color_rows_process(update: Update, context: ContextTypes.DEFAULT_TYPE)
 #Обрабатывает нажатие кнопок главного меню.
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает нажатие кнопок главного меню."""
+    if update.message.chat.type != 'private':
+        return
     text = update.message.text
     user_id = update.effective_user.id
 
