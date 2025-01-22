@@ -27,9 +27,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Константы состояний для ConversationHandler
-REGISTER, DATE, INTERVAL, VIEW, CALC_HOURS, TRANSFER_ACTIVITY, INTERVAL_INPUT, SICK_LEAVE_OPEN_DATE, COLOR_ROWS, NOTIFY_MESSAGE,BAN_USER, BAN_DATE, BAN_REASON, ACTIVITY, RESULT, ENTER_ACTIVITY_USER_ID, ENTER_ACTIVITY_FIO, ENTER_ACTIVITY_DATE, ENTER_ACTIVITY_INTERVAL = range(19)
+REGISTER, DATE, INTERVAL, VIEW, CALC_HOURS, TRANSFER_ACTIVITY, INTERVAL_INPUT, SICK_LEAVE_OPEN_DATE, COLOR_ROWS, NOTIFY_MESSAGE,BAN_USER, BAN_DATE, BAN_REASON, ACTIVITY, RESULT, ENTER_ACTIVITY_USER_ID, ENTER_ACTIVITY_FIO, ENTER_ACTIVITY_DATE, ENTER_ACTIVITY_INTERVAL, CALC_SALARY_PERCENT = range(20)
 # Новые константы для редактирования
-EDIT_SELECT_ACTIVITY, EDIT_FIELD, EDIT_VALUE, RENAME = range(4)
+EDIT_SELECT_ACTIVITY, EDIT_FIELD, EDIT_VALUE, RENAME, COLOR_TRANSFERS = range(5)
 # Новые константы для удаления
 DELETE_SELECT_ACTIVITY, DELETE_CONFIRM, ADD_OLDER_USER, REMOVE_OLDER_USER, DELETE_ANY_ACTIVITY_ROW = range(5)
 # Новые константы для ввода данных и удаления
@@ -40,6 +40,7 @@ EXCEL_FILE = 'data.xlsx'
 # Список специальных user IDs для доступа к новой функции
 SPECIAL_USER_IDS = [461549398,402468895,1352307342]
 TARGET_USER_ID = 461549398
+GROUP_CHAT_ID = -4554225245
 DAYS_RU = {
     0: 'понедельник',
     1: 'вторник',
@@ -145,7 +146,7 @@ def main_menu(user_id):
     """Создаёт главное меню с кнопками. Добавляет 'Скачать таблицу' для специальных пользователей."""
     keyboard = [
         ['Активности', 'Больничный'],
-        ['Рассчитать оплату за час', 'Переименовать меня'],
+        ['Финансы', 'Переименовать меня'],
         ['Отметить прохождение теста или обучения']
     ]
 
@@ -173,7 +174,14 @@ def senior_menu():
     """Создаёт меню для старших пользователей."""
     keyboard = [
         ['Скачать таблицу', 'Закрасить строки'],
-        ['Назад']
+        ['Закрасить переносы ТО', 'Назад']
+    ]
+    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+def finance_menu():
+    """Создаёт подменю для раздела 'Финансы'."""
+    keyboard = [
+        ['Рассчитать оплату за час', 'Рассчитать зарплату'],  # Добавлены кнопки
+        ['Назад']  # Кнопка для возврата в главное меню
     ]
     return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 async def senior_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -239,6 +247,70 @@ def remove_older_user(user_id):
             ws_older_users.delete_rows(row[0].row, 1)
             wb.save(EXCEL_FILE)
             break
+# Обработчик для начала процесса закрашивания строк в листе "Transfers"
+async def color_transfers_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начинает процесс закрашивания строк в листе 'Transfers'."""
+    await update.message.reply_text(
+        "Введите номер строки, до которой необходимо закрасить данные в листе 'Transfers' (целое число):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return COLOR_TRANSFERS
+
+# Обработчик для закрашивания строк в листе "Transfers"
+async def color_transfers_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Закрашивает строки до указанного номера включительно в желтый цвет в листе 'Transfers'."""
+    row_input = update.message.text.strip()
+
+    if not row_input.isdigit():
+        await update.message.reply_text(
+            "Пожалуйста, введите корректное целое число для номера строки:"
+        )
+        return COLOR_TRANSFERS
+
+    row_number = int(row_input)
+
+    if row_number < 2:
+        await update.message.reply_text(
+            "Минимально допустимый номер строки - 2."
+        )
+        return COLOR_TRANSFERS
+
+    try:
+        wb = openpyxl.load_workbook(EXCEL_FILE)
+        ws_transfers = wb["Transfers"]
+
+        max_row = ws_transfers.max_row
+        if row_number > max_row:
+            await update.message.reply_text(
+                f"В таблице только {max_row} строк. Будут закрашены все строки до {max_row}."
+            )
+            row_number = max_row
+
+        # Определяем желтый цвет
+        yellow_fill = PatternFill(start_color="FFFF00",
+                                  end_color="FFFF00",
+                                  fill_type="solid")
+
+        # Закрашиваем строки от 2 до row_number включительно (предполагая, что 1-я строка - заголовок)
+        for row in ws_transfers.iter_rows(min_row=2, max_row=row_number, max_col=ws_transfers.max_column):
+            for cell in row:
+                cell.fill = yellow_fill
+
+        wb.save(EXCEL_FILE)
+
+        await update.message.reply_text(
+            f"Строки с 2 по {row_number} в листе 'Transfers' успешно закрашены в желтый цвет.",
+            reply_markup=main_menu(update.effective_user.id)
+        )
+
+        return ConversationHandler.END
+
+    except Exception as e:
+        logger.error(f"Ошибка при закрашивании строк в листе 'Transfers': {e}")
+        await update.message.reply_text(
+            "Произошла ошибка при обработке запроса. Пожалуйста, попробуйте позже."
+        )
+        return ConversationHandler.END
 # Обработчик для начала процесса ввода данных пользователя на лист "Activities"
 async def enter_activity_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начинает процесс ввода данных пользователя на лист 'Activities'."""
@@ -931,6 +1003,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Выберите действие в разделе 'Больничный':",
             reply_markup=sick_menu()
         )
+    elif text == 'Финансы':  # Обработка новой кнопки "Финансы"
+        await update.message.reply_text(
+            "Выберите действие в разделе 'Финансы':",
+            reply_markup=finance_menu()
+        )
+    elif text == 'Рассчитать зарплату':  # Обработка новой кнопки
+        return await calc_salary_start(update, context)
     elif text == 'Особые действия':
         await update.message.reply_text(
             "Выберите действие в разделе для специальных пользователей:",
@@ -953,6 +1032,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await back_to_main_menu(update, context)
     elif text == 'Отмена':
         await cancel(update, context)
+    elif text == 'Закрасить переносы ТО':
+        await color_transfers_start(update, context)
     else:
         await update.message.reply_text(
             "Пожалуйста, используйте кнопки меню.",
@@ -1010,19 +1091,6 @@ async def process_uploaded_file(file_path, update: Update, context: ContextTypes
             init_ws_training = init_wb["Training"]
             for row in uploaded_ws_training.iter_rows(min_row=2, values_only=True):
                 init_ws_training.append(row)
-                
-        # Перенос данных из листа "OlderUsers"
-        if "OlderUsers" in uploaded_wb.sheetnames:
-            uploaded_ws_older_users = uploaded_wb["OlderUsers"]
-            init_ws_older_users = init_wb["OlderUsers"]
-            for row in uploaded_ws_older_users.iter_rows(min_row=2, values_only=True):
-                init_ws_older_users.append(row)
-                # Перенос данных из листа "OlderUsers"
-        if "Transfers" in uploaded_wb.sheetnames:
-            uploaded_ws_transfers = uploaded_wb["Transfers"]
-            init_ws_transfers = init_wb["Transfers"]
-            for row in uploaded_ws_transfers.iter_rows(min_row=2, values_only=True):
-                init_ws_transfers.append(row)
 
         # Сохранение изменений
         init_wb.save(EXCEL_FILE)
@@ -1407,17 +1475,16 @@ async def sick_leave_open_date(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("Не удалось найти ваше ФИО в базе данных.")
         return ConversationHandler.END
 
-    # Формируем сообщение для отправки специальным пользователям
+    # Формируем сообщение для отправки в группу
     message = f"{fio} открыл или продлил больничный, дата приема - {next_appointment_date}"
 
-    # Отправляем сообщение специальным пользователям
-    for special_user_id in SPECIAL_USER_IDS:
-        try:
-            await context.bot.send_message(chat_id=special_user_id, text=message)
-        except Exception as e:
-            logger.error(f"Не удалось отправить сообщение пользователю {special_user_id}: {e}")
+    # Отправляем сообщение в группу
+    try:
+        await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
+    except Exception as e:
+        logger.error(f"Не удалось отправить сообщение в группу: {e}")
 
-    await update.message.reply_text("Информация отправлена.", reply_markup=main_menu(user_id))
+    await update.message.reply_text("Информация отправлена в группу.", reply_markup=main_menu(user_id))
     return ConversationHandler.END
 #продлен больничный
 async def sick_leave_return(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1443,18 +1510,16 @@ async def sick_leave_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Не удалось найти ваше ФИО в базе данных.")
         return
 
-    # Формируем сообщение для отправки специальным пользователям
+    # Формируем сообщение для отправки в группу
     message = f"{fio} закрыл больничный"
 
-    # Отправляем сообщение специальным пользователям
-    for special_user_id in SPECIAL_USER_IDS:
-        try:
-            await context.bot.send_message(chat_id=special_user_id, text=message)
-        except Exception as e:
-            logger.error(f"Не удалось отправить сообщение пользователю {special_user_id}: {e}")
+    # Отправляем сообщение в группу
+    try:
+        await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
+    except Exception as e:
+        logger.error(f"Не удалось отправить сообщение в группу: {e}")
 
-
-    await update.message.reply_text("Информация отправлена ВС.", reply_markup=main_menu(user_id))
+    await update.message.reply_text("Информация отправлена в группу.", reply_markup=main_menu(user_id))
 #скачать таблицу
 async def download_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправляет файл data.xlsx специальному пользователю."""
@@ -1511,6 +1576,66 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена текущей операции."""
     await update.message.reply_text(
         'Операция отменена.',
+        reply_markup=main_menu(update.effective_user.id)
+    )
+    return ConversationHandler.END
+#Расчет зарплаты
+async def calc_salary_start_one(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начинает процесс расчёта зарплаты."""
+    user_id = update.effective_user.id
+
+    # Устанавливаем оклад в зависимости от роли пользователя
+    if user_id in SPECIAL_USER_IDS:
+        fixed_salary = 54125  # Фиксированный оклад для специальных пользователей
+    elif user_id in get_older_users():
+        fixed_salary = 47845  # Фиксированный оклад для старших спецов
+    else:
+        fixed_salary = 40329.6  # Стандартный фиксированный оклад
+
+    context.user_data['salary'] = fixed_salary  # Сохраняем оклад в контексте
+
+    await update.message.reply_text(
+        f"Фиксированный оклад установлен: {fixed_salary} P\n"
+        "Введите процент премии от 1 до 60:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return CALC_SALARY_PERCENT
+async def calc_salary_percent(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает ввод процента премии и рассчитывает зарплату."""
+    percent_text = update.message.text.strip()
+
+    try:
+        percent = float(percent_text.replace(',', '.'))
+        if percent < 1 or percent > 60:
+            await update.message.reply_text(
+                "Процент премии должен быть от 1 до 60. Пожалуйста, введите корректное значение:"
+            )
+            return CALC_SALARY_PERCENT
+    except ValueError:
+        await update.message.reply_text(
+            "Пожалуйста, введите числовое значение процента премии:"
+        )
+        return CALC_SALARY_PERCENT
+
+    # Получаем оклад из контекста
+    salary = context.user_data.get('salary')
+    if not salary:
+        await update.message.reply_text(
+            "Ошибка при получении данных. Попробуйте снова.",
+            reply_markup=main_menu(update.effective_user.id)
+        )
+        return ConversationHandler.END
+
+    # Выполняем расчёты
+    bonus_multiplier = 1 + (percent / 100)  # Увеличиваем оклад на процент премии
+    salary_with_bonus = salary * bonus_multiplier
+    salary_with_tax = salary_with_bonus * 0.87  # Учитываем налоги (13%)
+
+    # Форматируем результат
+    salary_with_tax = round(salary_with_tax, 2)
+
+    await update.message.reply_text(
+        f"Оплата с учетом МП за месяц и вычетом налогов = {salary_with_tax} ₽",
         reply_markup=main_menu(update.effective_user.id)
     )
     return ConversationHandler.END
@@ -1772,9 +1897,29 @@ def main():
         },
         fallbacks=[CommandHandler('cancel', cancel)],
     )
+    # ConversationHandler для закрашивания строк в листе "Transfers"
+    color_transfers_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Закрасить переносы ТО$"), color_transfers_start)],
+        states={
+            COLOR_TRANSFERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, color_transfers_process)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+    # ConversationHandler для расчёта зарплаты
+    calc_salary_handler_one = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Рассчитать зарплату$"), calc_salary_start_one)],
+        states={
+            CALC_SALARY_PERCENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, calc_salary_percent)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+
+    # Добавление обработчика в приложение
+    application.add_handler(calc_salary_handler_one)
+    application.add_handler(calc_salary_handler)
 
     # Обработчик сообщений для главного меню
-
+    application.add_handler(color_transfers_handler)
     application.add_handler(enter_activity_handler)
     application.add_handler(delete_any_activity_handler)
     application.add_handler(add_older_user_handler)
